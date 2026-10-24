@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monitoring Kualitas Air - Erga (301230006)</title>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+:root{
+  --bg:#e3f2f1; --panel:#ffffff; --ink:#0e2f33; --muted:#52737a; --line:#c4dcdd;
+  --brand:#00838f; --ok:#2e8b57; --warn:#c8402a; --wait:#8a9a9d;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#0d1d20; --panel:#14292d; --ink:#e3f2f1; --muted:#8fb0b5; --line:#254247; --brand:#4dd0e1; --ok:#58c58a; --warn:#ff7a62; }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Segoe UI",system-ui,sans-serif;line-height:1.45}
+.wrap{max-width:1180px;margin:0 auto;padding:24px 16px 48px}
+header{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;align-items:flex-end;border-bottom:2px solid var(--brand);padding-bottom:14px}
+h1{margin:0;font-size:clamp(1.6rem,4.5vw,2.5rem);letter-spacing:-.02em}
+.sub{margin:4px 0 0;color:var(--muted)}
+.conn{display:flex;align-items:center;gap:8px}
+.dot{width:11px;height:11px;border-radius:50%;background:var(--wait)}
+.dot.ok{background:var(--ok)}
+.topic{margin:10px 0 0;color:var(--muted);font:.85rem ui-monospace,Menlo,Consolas,monospace;word-break:break-all}
+.banner{margin:18px 0 0;padding:14px 18px;border-radius:10px;font-weight:600;background:var(--panel);border:2px solid var(--line)}
+.banner.ok{border-color:var(--ok);color:var(--ok)}
+.banner.warn{border-color:var(--warn);color:var(--warn)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin-top:18px}
+.card{background:var(--panel);border:1px solid var(--line);border-top:4px solid var(--brand);border-radius:12px;padding:18px}
+.card h3{margin:0;font-size:1rem;color:var(--muted);font-weight:600}
+.val{font-size:2.6rem;font-weight:700;letter-spacing:-.03em;margin:8px 0 6px}
+.val small{font-size:1rem;font-weight:500;color:var(--muted)}
+.badge{display:inline-block;padding:3px 12px;border-radius:999px;font-size:.85rem;font-weight:600;color:#fff;background:var(--wait)}
+.badge.ok{background:var(--ok)}
+.badge.warn{background:var(--warn)}
+.range{margin:8px 0 0;font-size:.82rem;color:var(--muted)}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr));gap:16px;margin-top:18px}
+.chart{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;height:340px}
+.log{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:18px}
+.log h2{margin:0 0 8px;font-size:1.05rem}
+.scroll{overflow-x:auto;max-height:230px;overflow-y:auto}
+table{width:100%;border-collapse:collapse;font-size:.9rem}
+th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--panel)}
+td.w{color:var(--warn);font-weight:600}
+:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Aquaculture Monitoring Center</h1>
+      <p class="sub">Erga &middot; NIM 301230006 &middot; Monitoring TDS, pH, dan suhu air</p>
+    </div>
+    <div class="conn"><span class="dot" id="dot"></span><span id="conn">Menghubungkan ke server cloud...</span></div>
+  </header>
+  <p class="topic">topic: <span id="topicLabel"></span></p>
+
+  <div class="banner" id="banner">Menunggu data dari ESP32 (Wokwi).</div>
+
+  <section class="cards" aria-label="Pembacaan sensor">
+    <div class="card"><h3>TDS (Total Dissolved Solids)</h3>
+      <div class="val"><span id="v-tds">--</span> <small>ppm</small></div>
+      <span class="badge" id="b-tds">--</span>
+      <p class="range">Batas aman: maksimal 500 ppm</p></div>
+    <div class="card"><h3>pH Air</h3>
+      <div class="val"><span id="v-ph">--</span></div>
+      <span class="badge" id="b-ph">--</span>
+      <p class="range">Batas aman: 6,5 sampai 8,5</p></div>
+    <div class="card"><h3>Suhu Air</h3>
+      <div class="val"><span id="v-suhu">--</span> <small>&deg;C</small></div>
+      <span class="badge" id="b-suhu">--</span>
+      <p class="range">Batas aman: 25 sampai 32 &deg;C</p></div>
+  </section>
+
+  <section class="charts" aria-label="Grafik real-time">
+    <div class="chart"><canvas id="chartTDS"></canvas></div>
+    <div class="chart"><canvas id="chartSuhuPH"></canvas></div>
+  </section>
+
+  <section class="log">
+    <h2>Riwayat data terbaru</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Waktu</th><th>TDS (ppm)</th><th>pH</th><th>Suhu (&deg;C)</th><th>Status</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+// ===== Identitas (harus sama dengan mqtt_topic di sketch.ino) =====
+const NIM  = "301230006";
+const NAMA = "Erga";
+const topicData = "kelas/iot/waterquality/" + NIM;
+const BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
+// ==================================================================
+
+// Batas kualitas air (samakan dengan sketch.ino)
+const LIMIT = { suhuMin: 25, suhuMax: 32, phMin: 6.5, phMax: 8.5, tdsMax: 500 };
+const MAX_POINTS = 20;
+
+const $ = id => document.getElementById(id);
+$("topicLabel").textContent = topicData;
+
+const css = getComputedStyle(document.documentElement);
+Chart.defaults.color = css.getPropertyValue("--muted").trim();
+Chart.defaults.borderColor = css.getPropertyValue("--line").trim();
+
+const chartTDS = new Chart($("chartTDS"), {
+  type: "line",
+  data: { labels: [], datasets: [{ label: "TDS (ppm)", data: [], borderColor: "#00acc1", backgroundColor: "rgba(0,172,193,.2)", fill: true, tension: .35 }] },
+  options: { responsive: true, maintainAspectRatio: false, animation: false, scales: { y: { suggestedMin: 0, suggestedMax: 1000 } } }
+});
+
+const chartSuhuPH = new Chart($("chartSuhuPH"), {
+  type: "line",
+  data: { labels: [], datasets: [
+    { label: "Suhu (°C)", data: [], borderColor: "#ff7043", backgroundColor: "rgba(255,112,67,.2)", tension: .35 },
+    { label: "pH", data: [], borderColor: "#7cb342", backgroundColor: "rgba(124,179,66,.2)", tension: .35 }
+  ] },
+  options: { responsive: true, maintainAspectRatio: false, animation: false }
+});
+
+function pushPoint(chart, label, values) {
+  chart.data.labels.push(label);
+  values.forEach((v, i) => chart.data.datasets[i].data.push(v));
+  if (chart.data.labels.length > MAX_POINTS) {
+    chart.data.labels.shift();
+    chart.data.datasets.forEach(d => d.data.shift());
+  }
+  chart.update();
+}
+
+function setBadge(id, ok) {
+  const el = $(id);
+  el.textContent = ok ? "Normal" : "Di luar batas";
+  el.className = "badge " + (ok ? "ok" : "warn");
+}
+
+function pad(n) { return String(n).padStart(2, "0"); }
+
+let lastMsg = 0;
+
+function render(d) {
+  const suhu = Number(d.suhu), tds = Number(d.tds), ph = Number(d.ph);
+  if ([suhu, tds, ph].some(isNaN)) return;
+  lastMsg = Date.now();
+
+  $("v-tds").textContent = tds;
+  $("v-ph").textContent = ph.toFixed(1);
+  $("v-suhu").textContent = suhu.toFixed(1);
+
+  const tdsOk  = tds <= LIMIT.tdsMax;
+  const phOk   = ph >= LIMIT.phMin && ph <= LIMIT.phMax;
+  const suhuOk = suhu >= LIMIT.suhuMin && suhu <= LIMIT.suhuMax;
+  setBadge("b-tds", tdsOk); setBadge("b-ph", phOk); setBadge("b-suhu", suhuOk);
+
+  const masalah = [];
+  if (!tdsOk) masalah.push("TDS " + (tds > LIMIT.tdsMax ? "terlalu tinggi" : "tidak normal"));
+  if (!phOk) masalah.push("pH " + (ph < LIMIT.phMin ? "terlalu asam" : "terlalu basa"));
+  if (!suhuOk) masalah.push("suhu " + (suhu < LIMIT.suhuMin ? "terlalu dingin" : "terlalu panas"));
+
+  const banner = $("banner");
+  if (masalah.length === 0) {
+    banner.className = "banner ok";
+    banner.textContent = "Kualitas air normal. Semua parameter dalam batas aman.";
+  } else {
+    banner.className = "banner warn";
+    banner.textContent = "Peringatan: " + masalah.join(", ") + ".";
+  }
+
+  const now = new Date();
+  const label = pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds());
+  pushPoint(chartTDS, label, [tds]);
+  pushPoint(chartSuhuPH, label, [suhu, ph]);
+
+  const tr = document.createElement("tr");
+  const cells = [label, tds, ph.toFixed(1), suhu.toFixed(1), masalah.length ? "PERINGATAN" : "NORMAL"];
+  cells.forEach((c, i) => {
+    const td = document.createElement("td");
+    td.textContent = c;
+    if (i === 4 && masalah.length) td.className = "w";
+    tr.appendChild(td);
+  });
+  const rows = $("rows");
+  rows.prepend(tr);
+  while (rows.children.length > 30) rows.lastChild.remove();
+}
+
+const client = mqtt.connect(BROKER_URL, {
+  clientId: "dash_" + NIM + "_" + Math.random().toString(16).slice(2, 8),
+  reconnectPeriod: 3000
+});
+
+client.on("connect", () => {
+  $("dot").classList.add("ok");
+  $("conn").textContent = "Terhubung ke server cloud (live)";
+  client.subscribe(topicData);
+});
+client.on("reconnect", () => { $("dot").classList.remove("ok"); $("conn").textContent = "Menyambung ulang..."; });
+client.on("offline",   () => { $("dot").classList.remove("ok"); $("conn").textContent = "Offline"; });
+client.on("message", (topic, payload) => {
+  try { render(JSON.parse(payload.toString())); }
+  catch (e) { console.error("Gagal parsing JSON", e); }
+});
+
+// Tandai jika data berhenti masuk lebih dari 10 detik (simulasi dihentikan / sensor terputus)
+setInterval(() => {
+  if (lastMsg && Date.now() - lastMsg > 10000) {
+    const banner = $("banner");
+    banner.className = "banner warn";
+    banner.textContent = "Tidak ada data baru lebih dari 10 detik. Periksa simulasi Wokwi.";
+  }
+}, 2000);
+</script>
+</body>
+</html>
